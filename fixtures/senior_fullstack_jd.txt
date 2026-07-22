@@ -1,0 +1,26 @@
+Senior Full-Stack Developer
+
+About the role:
+We are hiring a Senior Full-Stack Developer to design and ship customer-facing features.
+
+Requirements:
+- Python
+- FastAPI
+- React or Next.js
+- AWS
+- PostgreSQL
+- Docker
+- CI/CD
+- Strong communication skills
+- 5+ years of software engineering experience
+
+Preferred:
+- pytest and automated testing
+- Terraform
+- Experience mentoring teammates / team leadership
+
+Responsibilities:
+- Design and ship full-stack features
+- Own CI/CD and containerized deployments
+- Mentor teammates and communicate clearly with stakeholders
+- Improve reliability and observability of microservices

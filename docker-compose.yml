@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: resume
+      POSTGRES_PASSWORD: resume
+      POSTGRES_DB: resume_reviewer
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resume -d resume_reviewer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    profiles: ["ollama"]
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://resume:resume@db:5432/resume_reviewer
+      UPLOAD_DIR: /app/uploads
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        API_PROXY_TARGET: http://backend:8000
+    ports:
+      - "3000:3000"
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  uploads:
+  ollama_data:
