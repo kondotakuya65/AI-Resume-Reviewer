@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import resolve_user
@@ -75,11 +75,12 @@ def _to_response(run) -> AnalysisResponse:
 @router.post("/analyses", response_model=AnalysisResponse)
 async def create_analysis(
     payload: AnalysisCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(resolve_user),
 ) -> AnalysisResponse:
     try:
-        run = await analysis_service.run_analysis(
+        run = analysis_service.create_analysis_run(
             db,
             user_id=user.id,
             resume_id=payload.resume_id,
@@ -89,6 +90,9 @@ async def create_analysis(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # Run LLM work in the background so Next.js proxy does not hang up on slow Ollama/PDF jobs
+    background_tasks.add_task(analysis_service.execute_analysis_job, run.id, user.id)
     return _to_response(run)
 
 

@@ -4,6 +4,10 @@ const apiProxyTarget = process.env.API_PROXY_TARGET || process.env.NEXT_PUBLIC_A
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Allow long-running proxied API calls (analysis / Ollama). Next default is ~30s.
+  experimental: {
+    proxyTimeout: 600_000,
+  },
   async rewrites() {
     return [
       {

@@ -43,7 +43,9 @@ class OllamaClient:
                 {"role": "user", "content": user},
             ],
         }
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        # Keep per-call timeout bounded so slow local models fall back instead of hanging forever
+        timeout = httpx.Timeout(90.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
             resp.raise_for_status()
             content = resp.json()["message"]["content"]

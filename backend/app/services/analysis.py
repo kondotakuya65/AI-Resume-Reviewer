@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings, get_settings
+from app.db.session import SessionLocal
 from app.models import (
     AnalysisRun,
     AnalysisScore,
@@ -20,7 +21,8 @@ from app.services.resume_extractor import detect_ats_issues
 from app.services.scoring import compute_scores
 
 SENSITIVE_KEYS = {"age", "gender", "race", "nationality", "religion", "photo", "marital_status", "disability"}
-
+RESUME_TEXT_LIMIT = 8000
+JD_TEXT_LIMIT = 8000
 
 PARSE_RESUME_SYSTEM = """You extract structured resume data for a career tool.
 Return JSON only. Never include or infer age, gender, race, nationality, religion,
@@ -65,7 +67,7 @@ async def parse_resume_text(text: str, settings: Settings | None = None) -> dict
     raw = await safe_complete_json(
         client,
         PARSE_RESUME_SYSTEM,
-        f"Extract structured resume data.\n\nResume text:\n{text[:12000]}",
+        f"Extract structured resume data.\n\nResume text:\n{text[:RESUME_TEXT_LIMIT]}",
     )
     return _strip_sensitive(raw)
 
@@ -76,11 +78,11 @@ async def parse_job_description(text: str, settings: Settings | None = None) -> 
     return await safe_complete_json(
         client,
         PARSE_JD_SYSTEM,
-        f"Extract job requirements.\n\nJob description:\n{text[:12000]}",
+        f"Extract job requirements.\n\nJob description:\n{text[:JD_TEXT_LIMIT]}",
     )
 
 
-async def run_analysis(
+def create_analysis_run(
     db: Session,
     *,
     user_id: UUID,
@@ -90,6 +92,7 @@ async def run_analysis(
     experience_level: str | None,
     settings: Settings | None = None,
 ) -> AnalysisRun:
+    """Create a running analysis row quickly; LLM work happens in the background."""
     settings = settings or get_settings()
     resume = db.get(Resume, resume_id)
     if not resume or resume.user_id != user_id:
@@ -97,7 +100,6 @@ async def run_analysis(
     if not resume.extracted_text:
         raise ValueError("Resume has no extracted text")
 
-    jd: JobDescription | None = None
     if job_description_id:
         jd = db.get(JobDescription, job_description_id)
         if not jd or jd.user_id != user_id:
@@ -118,57 +120,112 @@ async def run_analysis(
         estimated_cost=0.0,
     )
     db.add(run)
-    db.flush()
+    db.commit()
+    db.refresh(run)
+    return run
 
+
+async def execute_analysis_job(analysis_id: UUID, user_id: UUID) -> None:
+    """Background worker: parse + score using a fresh DB session."""
+    settings = get_settings()
+    db = SessionLocal()
     try:
-        structured = resume.structured_data or await parse_resume_text(resume.extracted_text, settings)
-        resume.structured_data = structured
-
-        jd_parsed: dict[str, Any] = {}
-        if jd:
-            jd_parsed = jd.parsed_requirements or await parse_job_description(jd.raw_text, settings)
-            jd.parsed_requirements = jd_parsed
-
-        compare_user = (
-            f"Target role: {target_role}\nExperience level: {experience_level}\n\n"
-            f"Structured resume JSON:\n{structured}\n\n"
-            f"Job requirements JSON:\n{jd_parsed or 'No job description provided; score general resume quality.'}\n\n"
-            f"Raw resume excerpt:\n{resume.extracted_text[:6000]}\n"
+        run = (
+            db.query(AnalysisRun)
+            .filter(AnalysisRun.id == analysis_id, AnalysisRun.user_id == user_id)
+            .one_or_none()
         )
-        comparison = await safe_complete_json(client, COMPARE_SYSTEM, compare_user)
-        comparison = _strip_sensitive(comparison)
+        if not run:
+            return
 
-        ats_heuristic = detect_ats_issues(resume.extracted_text)
-        scores = compute_scores(comparison, ats_heuristic)
+        resume = db.get(Resume, run.resume_id)
+        if not resume or not resume.extracted_text:
+            run.status = "failed"
+            run.error_message = "Resume not found or empty"
+            db.commit()
+            return
 
-        run.strengths = list(comparison.get("strengths") or [])
-        run.weaknesses = list(comparison.get("weaknesses") or [])
-        run.missing_keywords = list(comparison.get("missing_keywords") or [])
-        run.matched_skills = list(comparison.get("matched_skills") or [])
+        jd: JobDescription | None = None
+        if run.job_description_id:
+            jd = db.get(JobDescription, run.job_description_id)
 
-        db.add(AnalysisScore(analysis_run_id=run.id, **scores))
+        client = get_llm_client(settings)
+        try:
+            structured = resume.structured_data or await parse_resume_text(resume.extracted_text, settings)
+            resume.structured_data = structured
 
-        for rec in comparison.get("recommendations") or []:
-            priority = str(rec.get("priority", "important")).lower()
-            if priority not in {"critical", "important", "optional"}:
-                priority = "important"
-            db.add(
-                Recommendation(
-                    analysis_run_id=run.id,
-                    priority=priority,
-                    section=str(rec.get("section", "general")),
-                    message=str(rec.get("message", "")),
-                )
+            jd_parsed: dict[str, Any] = {}
+            if jd:
+                jd_parsed = jd.parsed_requirements or await parse_job_description(jd.raw_text, settings)
+                jd.parsed_requirements = jd_parsed
+
+            compare_user = (
+                f"Target role: {run.target_role}\nExperience level: {run.experience_level}\n\n"
+                f"Structured resume JSON:\n{structured}\n\n"
+                f"Job requirements JSON:\n{jd_parsed or 'No job description provided; score general resume quality.'}\n\n"
+                f"Raw resume excerpt:\n{resume.extracted_text[:6000]}\n"
             )
+            comparison = await safe_complete_json(client, COMPARE_SYSTEM, compare_user)
+            comparison = _strip_sensitive(comparison)
 
-        run.status = "completed"
-        run.completed_at = datetime.now(timezone.utc)
-        db.commit()
-    except Exception as exc:  # noqa: BLE001
-        run.status = "failed"
-        run.error_message = str(exc)
-        db.commit()
+            ats_heuristic = detect_ats_issues(resume.extracted_text)
+            scores = compute_scores(comparison, ats_heuristic)
 
+            run.strengths = list(comparison.get("strengths") or [])
+            run.weaknesses = list(comparison.get("weaknesses") or [])
+            run.missing_keywords = list(comparison.get("missing_keywords") or [])
+            run.matched_skills = list(comparison.get("matched_skills") or [])
+
+            db.add(AnalysisScore(analysis_run_id=run.id, **scores))
+
+            for rec in comparison.get("recommendations") or []:
+                priority = str(rec.get("priority", "important")).lower()
+                if priority not in {"critical", "important", "optional"}:
+                    priority = "important"
+                db.add(
+                    Recommendation(
+                        analysis_run_id=run.id,
+                        priority=priority,
+                        section=str(rec.get("section", "general")),
+                        message=str(rec.get("message", "")),
+                    )
+                )
+
+            run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            run = db.get(AnalysisRun, analysis_id)
+            if run:
+                run.status = "failed"
+                run.error_message = str(exc)
+                db.commit()
+    finally:
+        db.close()
+
+
+async def run_analysis(
+    db: Session,
+    *,
+    user_id: UUID,
+    resume_id: UUID,
+    job_description_id: UUID | None,
+    target_role: str | None,
+    experience_level: str | None,
+    settings: Settings | None = None,
+) -> AnalysisRun:
+    """Synchronous helper used by tests: create + execute in the same request."""
+    run = create_analysis_run(
+        db,
+        user_id=user_id,
+        resume_id=resume_id,
+        job_description_id=job_description_id,
+        target_role=target_role,
+        experience_level=experience_level,
+        settings=settings,
+    )
+    await execute_analysis_job(run.id, user_id)
     return get_analysis(db, run.id, user_id)
 
 

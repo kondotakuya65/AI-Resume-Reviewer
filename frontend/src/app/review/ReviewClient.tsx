@@ -98,12 +98,27 @@ export default function ReviewClient() {
         const jd = await api.createJobDescription(jdText, targetRole);
         jobId = jd.id;
       }
-      const result = await api.createAnalysis({
+      let result = await api.createAnalysis({
         resume_id: resumeId,
         job_description_id: jobId,
         target_role: targetRole,
         experience_level: experienceLevel,
       });
+
+      // Analysis runs in the background (Ollama + PDF can take a while)
+      const started = Date.now();
+      while (result.status === "running" || result.status === "pending") {
+        if (Date.now() - started > 10 * 60 * 1000) {
+          throw new Error("Analysis timed out. Check that the backend and Ollama are still running.");
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+        result = await api.getAnalysis(result.id);
+      }
+
+      if (result.status === "failed") {
+        throw new Error(result.error_message || "Analysis failed");
+      }
+
       setAnalysis(result);
       setDisclaimer(result.disclaimer);
       setStep("results");
@@ -230,7 +245,7 @@ export default function ReviewClient() {
                 Back
               </button>
               <button className="btn btn-primary" disabled={busy} type="submit">
-                {busy ? "Analyzing…" : "Run AI analysis"}
+                {busy ? "Analyzing… this can take a minute with Ollama" : "Run AI analysis"}
               </button>
             </div>
           </form>

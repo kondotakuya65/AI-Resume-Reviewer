@@ -10,6 +10,8 @@ TMP.mkdir(exist_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{(TMP / 'test.db').as_posix()}"
 os.environ["UPLOAD_DIR"] = str(TMP / "uploads")
 os.environ["LLM_PROVIDER"] = "ollama"
+# Ensure tests never wait on a real Ollama instance
+os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:9"
 
 from app.core.config import get_settings
 
@@ -21,7 +23,13 @@ from app.services.llm import MockLLMClient  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _reset_db():
+def _reset_db(monkeypatch):
+    from app.services.llm import MockLLMClient
+
+    monkeypatch.setattr(
+        "app.services.analysis.get_llm_client",
+        lambda settings=None, allow_mock=True: MockLLMClient(),
+    )
     init_db()
     yield
     # cleanup tables between tests
@@ -80,7 +88,17 @@ async def test_health_and_upload_flow():
         )
         assert analysis.status_code == 200, analysis.text
         data = analysis.json()
-        assert data["status"] == "completed"
+        assert data["status"] in {"running", "pending", "completed"}
+
+        # Background task finishes after the POST response is built
+        for _ in range(30):
+            if data["status"] in {"completed", "failed"}:
+                break
+            polled = await ac.get(f"/api/analyses/{data['id']}")
+            assert polled.status_code == 200
+            data = polled.json()
+
+        assert data["status"] == "completed", data.get("error_message")
         assert data["scores"]["overall_score"] > 0
         assert len(data["recommendations"]) >= 5
 
