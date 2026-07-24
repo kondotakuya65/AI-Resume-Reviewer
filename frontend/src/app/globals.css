@@ -63,8 +63,18 @@ a {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 1.35rem;
   font-weight: 700;
+}
+
+.brand img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
 }
 
 .brand span {

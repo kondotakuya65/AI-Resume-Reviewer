@@ -1,6 +1,50 @@
-# AI Resume Reviewer (ResumeSignal)
+# ResumeSignal — AI Resume Reviewer
 
-Portfolio sample: an AI-powered resume review app that scores a resume against a job description, flags ATS issues, and rewrites individual bullets — with **explainable category scores** instead of a single opaque LLM number.
+<p align="center">
+  <img src="frontend/public/fav.png" alt="ResumeSignal" width="96" height="96" />
+</p>
+
+<p align="center">
+  <strong>Explainable AI resume review</strong> — scores, ATS guidance, keyword gaps, and bullet rewrites<br/>
+  against a real job description. Built as a portfolio sample with Next.js + FastAPI + PostgreSQL.
+</p>
+
+<p align="center">
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#quick-start-local-no-docker">Quick start</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#api">API</a>
+</p>
+
+---
+
+## Screenshots
+
+| Landing | Upload & extract |
+| --- | --- |
+| ![Landing page](shots/capture1.PNG) | ![Resume upload preview](shots/capture2.PNG) |
+
+| Score dashboard | Analysis history |
+| --- | --- |
+| ![Analysis scores and recommendations](shots/capture3.PNG) | ![Guest analysis history](shots/capture4.PNG) |
+
+---
+
+## What it does
+
+Upload a resume (PDF / DOCX / TXT), paste an optional job description, and get:
+
+- **Overall / job match / ATS** scores from a transparent category model (not one opaque LLM number)
+- Matched skills and missing keywords
+- Prioritized recommendations (Critical / Important / Optional)
+- Single-bullet rewrites with before/after
+- Markdown export and guest analysis history
+
+Includes a one-click **Daniel demo** storyline for portfolio walkthroughs.
+
+> This analysis is AI-generated guidance and does not guarantee interviews, employment, or acceptance by applicant tracking systems.
+
+---
 
 ## Architecture
 
@@ -16,6 +60,17 @@ Resume Processing → LLM Provider Adapter → Scoring Engine
 Storage Adapter → local disk or AWS S3
 ```
 
+**Env switchable:**
+
+| Knob | Values |
+| --- | --- |
+| `LLM_PROVIDER` | `ollama` (default), `openai`, `anthropic` |
+| `STORAGE_BACKEND` | `local` (default), `s3` |
+
+If the LLM provider is unreachable, the backend falls back to a deterministic mock so demos still work.
+
+---
+
 ## Features (MVP)
 
 - Upload PDF / DOCX / TXT resumes
@@ -26,6 +81,9 @@ Storage Adapter → local disk or AWS S3
 - Markdown export + analysis history
 - Delete uploaded resume data
 - Guest session via cookie
+- Background analysis + polling (avoids proxy timeouts on slow local models)
+
+---
 
 ## Quick start (local, no Docker)
 
@@ -45,6 +103,8 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+Use **Python 3.12+ 64-bit** (or 3.14 64-bit) so `psycopg2-binary` / `greenlet` install from wheels.
+
 ### 2. Frontend
 
 ```bash
@@ -59,18 +119,14 @@ Open http://localhost:3000
 
 ### 3. LLM providers
 
-Set in `.env`:
+Copy [`.env.example`](.env.example) and set:
 
 | Variable | Values |
-|---|---|
+| --- | --- |
 | `LLM_PROVIDER` | `ollama` (default), `openai`, `anthropic` |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | e.g. `http://localhost:11434`, `llama3.1` |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | when using OpenAI |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | when using Anthropic |
-
-If Ollama/OpenAI/Anthropic is unreachable, the backend falls back to a **deterministic mock** so demos still work.
-
-Pull an Ollama model (optional):
 
 ```bash
 ollama pull llama3.1
@@ -79,10 +135,12 @@ ollama pull llama3.1
 ### 4. Storage
 
 | Variable | Values |
-|---|---|
+| --- | --- |
 | `STORAGE_BACKEND` | `local` (default) or `s3` |
 | `UPLOAD_DIR` | local folder |
 | `AWS_S3_BUCKET`, `AWS_REGION`, keys | required for S3 |
+
+---
 
 ## Docker Compose
 
@@ -101,6 +159,8 @@ Optional Ollama service profile:
 docker compose --profile ollama up --build
 ```
 
+---
+
 ## Demo story (Daniel)
 
 1. Open **Try Daniel's demo** on the landing page
@@ -112,10 +172,12 @@ docker compose --profile ollama up --build
 
 Sample fixtures live in [`fixtures/`](fixtures/).
 
+---
+
 ## API
 
 | Method | Path |
-|---|---|
+| --- | --- |
 | GET | `/api/health` |
 | POST | `/api/resumes/upload` |
 | GET | `/api/resumes/{id}` |
@@ -127,22 +189,29 @@ Sample fixtures live in [`fixtures/`](fixtures/).
 | GET | `/api/analyses/{id}/export` |
 | POST | `/api/rewrites` |
 
+---
+
 ## Scoring model
 
-Backend clamps and sums:
+Backend clamps and sums category scores:
 
-- Content quality 25
-- Job relevance 25
-- Achievements 15
-- Skills match 15
-- Structure / readability 10
-- ATS compatibility 10
+| Category | Max |
+| --- | --- |
+| Content quality | 25 |
+| Job relevance | 25 |
+| Achievements | 15 |
+| Skills match | 15 |
+| Structure / readability | 10 |
+| ATS compatibility | 10 |
+| **Total** | **100** |
+
+---
 
 ## Safety
 
 The system does not score age, gender, race, nationality, religion, photo, marital status, or disability. Sensitive fields are stripped from structured parses.
 
-> This analysis is AI-generated guidance and does not guarantee interviews, employment, or acceptance by applicant tracking systems.
+---
 
 ## Tests
 
@@ -152,13 +221,26 @@ pip install -r requirements.txt
 pytest
 ```
 
+---
+
 ## Project layout
 
 ```text
 /
-├── frontend/     Next.js App Router + Tailwind
-├── backend/      FastAPI + SQLAlchemy + Alembic
-├── fixtures/     Demo resume + JD
+├── frontend/          Next.js App Router + Tailwind
+├── backend/           FastAPI + SQLAlchemy + Alembic
+├── fixtures/          Demo resume + JD
+├── shots/             README screenshots
 ├── docker-compose.yml
 └── .env.example
 ```
+
+---
+
+## Stack
+
+- **Frontend:** Next.js 15, TypeScript, Tailwind
+- **Backend:** FastAPI, SQLAlchemy, Alembic
+- **DB:** PostgreSQL (SQLite supported for quick demos)
+- **LLM:** Ollama / OpenAI / Anthropic (env switch)
+- **Storage:** Local disk or AWS S3 (env switch)
